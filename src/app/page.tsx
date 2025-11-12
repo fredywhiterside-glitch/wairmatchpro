@@ -25,7 +25,9 @@ import {
   Download,
   Share2,
   Lock,
-  Gift
+  Gift,
+  AlertTriangle,
+  RefreshCw
 } from 'lucide-react'
 
 // Tipos de dados
@@ -170,6 +172,8 @@ export default function HaircutPhotoApp() {
   const [analysisProgress, setAnalysisProgress] = useState(0)
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [stream, setStream] = useState<MediaStream | null>(null)
+  const [cameraPermission, setCameraPermission] = useState<'unknown' | 'granted' | 'denied'>('unknown')
+  const [isRequestingPermission, setIsRequestingPermission] = useState(false)
   
   const fileInputRef = useRef<HTMLInputElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -189,6 +193,11 @@ export default function HaircutPhotoApp() {
     }
   }, [])
 
+  // Verificar permissão da câmera ao carregar
+  useEffect(() => {
+    checkCameraPermission()
+  }, [])
+
   // Limpar stream quando componente desmonta
   useEffect(() => {
     return () => {
@@ -197,6 +206,88 @@ export default function HaircutPhotoApp() {
       }
     }
   }, [stream])
+
+  const checkCameraPermission = async () => {
+    try {
+      if (!navigator.permissions) {
+        setCameraPermission('unknown')
+        return
+      }
+
+      const permission = await navigator.permissions.query({ name: 'camera' as PermissionName })
+      setCameraPermission(permission.state as 'granted' | 'denied')
+      
+      // Escutar mudanças na permissão
+      permission.onchange = () => {
+        setCameraPermission(permission.state as 'granted' | 'denied')
+      }
+    } catch (error) {
+      console.log('Não foi possível verificar permissão da câmera:', error)
+      setCameraPermission('unknown')
+    }
+  }
+
+  const requestCameraPermission = async () => {
+    setIsRequestingPermission(true)
+    setCameraError(null)
+
+    try {
+      // Verificar se o navegador suporta getUserMedia
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Seu navegador não suporta acesso à câmera. Tente usar Chrome, Firefox ou Safari.')
+      }
+
+      // Solicitar permissão para câmera
+      const mediaStream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          facingMode: 'user',
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        } 
+      })
+      
+      setCameraPermission('granted')
+      setStream(mediaStream)
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = mediaStream
+        
+        // Aguardar o vídeo carregar
+        videoRef.current.onloadedmetadata = () => {
+          setShowCamera(true)
+          setIsRequestingPermission(false)
+        }
+        
+        // Tratar erros do vídeo
+        videoRef.current.onerror = (e) => {
+          console.error('Erro no vídeo:', e)
+          setCameraError('Erro ao carregar o vídeo da câmera')
+          stopCamera()
+          setIsRequestingPermission(false)
+        }
+      }
+    } catch (error: any) {
+      console.error('Erro ao acessar câmera:', error)
+      setIsRequestingPermission(false)
+      
+      let errorMessage = 'Não foi possível acessar a câmera.'
+      
+      if (error.name === 'NotAllowedError') {
+        setCameraPermission('denied')
+        errorMessage = 'Permissão para câmera foi negada. Clique no ícone da câmera na barra de endereços do navegador e permita o acesso.'
+      } else if (error.name === 'NotFoundError') {
+        errorMessage = 'Nenhuma câmera foi encontrada no seu dispositivo.'
+      } else if (error.name === 'NotSupportedError') {
+        errorMessage = 'Seu navegador não suporta acesso à câmera. Tente usar Chrome, Firefox ou Safari.'
+      } else if (error.name === 'NotReadableError') {
+        errorMessage = 'Câmera está sendo usada por outro aplicativo. Feche outros apps que possam estar usando a câmera.'
+      } else if (error.message) {
+        errorMessage = error.message
+      }
+      
+      setCameraError(errorMessage)
+    }
+  }
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     // Verificar se pode usar (teste grátis ou premium)
@@ -230,58 +321,7 @@ export default function HaircutPhotoApp() {
       return
     }
 
-    setCameraError(null)
-
-    try {
-      // Verificar se o navegador suporta getUserMedia
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Seu navegador não suporta acesso à câmera')
-      }
-
-      // Solicitar permissão para câmera
-      const mediaStream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-          facingMode: 'user',
-          width: { ideal: 640 },
-          height: { ideal: 480 }
-        } 
-      })
-      
-      setStream(mediaStream)
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream
-        
-        // Aguardar o vídeo carregar
-        videoRef.current.onloadedmetadata = () => {
-          setShowCamera(true)
-        }
-        
-        // Tratar erros do vídeo
-        videoRef.current.onerror = (e) => {
-          console.error('Erro no vídeo:', e)
-          setCameraError('Erro ao carregar o vídeo da câmera')
-          stopCamera()
-        }
-      }
-    } catch (error: any) {
-      console.error('Erro ao acessar câmera:', error)
-      
-      let errorMessage = 'Não foi possível acessar a câmera.'
-      
-      if (error.name === 'NotAllowedError') {
-        errorMessage = 'Permissão para câmera negada. Por favor, permita o acesso à câmera e tente novamente.'
-      } else if (error.name === 'NotFoundError') {
-        errorMessage = 'Nenhuma câmera encontrada no dispositivo.'
-      } else if (error.name === 'NotSupportedError') {
-        errorMessage = 'Seu navegador não suporta acesso à câmera.'
-      } else if (error.message) {
-        errorMessage = error.message
-      }
-      
-      setCameraError(errorMessage)
-      alert(errorMessage + ' Tente fazer upload de uma foto.')
-    }
+    await requestCameraPermission()
   }
 
   const stopCamera = () => {
@@ -291,6 +331,7 @@ export default function HaircutPhotoApp() {
     }
     setShowCamera(false)
     setCameraError(null)
+    setIsRequestingPermission(false)
   }
 
   const capturePhoto = () => {
@@ -388,6 +429,36 @@ export default function HaircutPhotoApp() {
         if (!a.trending && b.trending) return 1
         return 0
       })
+  }
+
+  // Modal de permissão da câmera
+  if (isRequestingPermission) {
+    return (
+      <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center">
+        <Card className="max-w-md mx-4 bg-white">
+          <CardHeader className="text-center">
+            <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Camera className="w-8 h-8 text-blue-600 animate-pulse" />
+            </div>
+            <CardTitle className="text-xl text-gray-800">
+              Solicitando Permissão
+            </CardTitle>
+            <CardDescription>
+              Aguarde enquanto solicitamos acesso à sua câmera...
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="text-center">
+            <div className="flex items-center justify-center gap-2 mb-4">
+              <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
+              <span className="text-sm text-gray-600">Processando...</span>
+            </div>
+            <Button variant="outline" onClick={stopCamera}>
+              Cancelar
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   // Tela de resultados
@@ -851,9 +922,37 @@ export default function HaircutPhotoApp() {
               {/* Erro da câmera */}
               {cameraError && (
                 <div className="bg-red-100 border border-red-200 rounded-lg p-4">
-                  <p className="text-red-800 text-sm font-medium">
-                    ❌ {cameraError}
-                  </p>
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <p className="text-red-800 text-sm font-medium mb-2">
+                        Problema com a câmera:
+                      </p>
+                      <p className="text-red-700 text-sm mb-3">
+                        {cameraError}
+                      </p>
+                      {cameraPermission === 'denied' && (
+                        <div className="text-xs text-red-600 bg-red-50 p-2 rounded">
+                          <p className="font-medium mb-1">Como permitir acesso à câmera:</p>
+                          <p>1. Clique no ícone da câmera na barra de endereços</p>
+                          <p>2. Selecione "Permitir" para este site</p>
+                          <p>3. Recarregue a página e tente novamente</p>
+                        </div>
+                      )}
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        onClick={() => {
+                          setCameraError(null)
+                          checkCameraPermission()
+                        }}
+                        className="mt-2"
+                      >
+                        <RefreshCw className="w-4 h-4 mr-1" />
+                        Tentar Novamente
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -916,6 +1015,11 @@ export default function HaircutPhotoApp() {
                 {!isPremium && !hasUsedFreeTrial && (
                   <p className="mt-2 font-medium text-green-600">
                     🎁 Primeira análise grátis! Depois apenas R$ 19/mês
+                  </p>
+                )}
+                {cameraPermission === 'denied' && (
+                  <p className="mt-2 text-amber-600 font-medium">
+                    📷 Permissão da câmera negada. Use upload de foto ou permita acesso à câmera.
                   </p>
                 )}
               </div>
